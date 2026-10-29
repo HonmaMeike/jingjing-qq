@@ -1,0 +1,88 @@
+{
+  "name": "jingjing-qq",
+  "productName": "鲸鲸 · QQ 智能伙伴",
+  "version": "1.0.0",
+  "description": "DeepSeek 驱动的 QQ 桌面智能体：人设、长期记忆、情绪、自主成长、语音与多模态创作，内置 NapCat 控制台。",
+  "main": "dist-electron/main.cjs",
+  "author": "Reasonix Projects",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "build:renderer": "vite build",
+    "build:main": "node scripts/build-main.mjs",
+    "build": "npm run build:renderer && npm run build:main",
+    "start": "electron .",
+    "start:prod": "npm run build && electron .",
+    "pack": "npm run build && electron-builder --dir",
+    "dist": "npm run build && electron-builder --win nsis",
+    "screenshots": "node scripts/screenshot.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "lucide-react": "^0.468.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@types/ws": "^8.5.13",
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^38.0.0",
+    "electron-builder": "^25.1.8",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.5",
+    "vitest": "^2.1.8",
+    "app-builder-bin": "^4.0.0"
+  },
+  "build": {
+    "appId": "com.reasonix.jingjing",
+    "productName": "鲸鲸",
+    "directories": {
+      "output": "release",
+      "buildResources": "resources"
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*",
+      "package.json",
+      "resources/**/*"
+    ],
+    "asar": true,
+    "asarUnpack": [
+      "resources/napcat/**/*"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "resources/icon.ico",
+      "artifactName": "JingJing-${version}-Setup.${ext}",
+      "signAndEditExecutable": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "鲸鲸 QQ 智能伙伴"
+    },
+    "extraResources": [
+      {
+        "from": "public/pet",
+        "to": "pet"
+      }
+    ]
+  }
+}
