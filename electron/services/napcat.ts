@@ -756,16 +756,31 @@ export class NapCatService {
       if (!asset) throw new Error('未找到可用的 NapCat 安装包');
       this.log('info', '下载 ' + asset.name + `（${(asset.size / 1024 / 1024).toFixed(1)} MB）`);
       const zipPath = path.join(tempRoot, asset.name);
-      const dl = await fetch(asset.browser_download_url, { headers: { 'User-Agent': 'JingJing-App' } });
-      if (!dl.ok) throw new Error('下载失败：HTTP ' + dl.status);
-      const buffer = Buffer.from(await dl.arrayBuffer());
+      let buffer: Buffer | null = null;
+      for (let attempt = 1; attempt <= 3; attempt += 1) {
+        try {
+          await fs.rm(zipPath, { force: true });
+          const dl = await fetch(asset.browser_download_url + (attempt > 1 ? '?retry=' + attempt : ''), { headers: { 'User-Agent': 'JingJing-App' }, signal: AbortSignal.timeout(180_000) });
+          if (!dl.ok) throw new Error('HTTP ' + dl.status);
+          const got = Buffer.from(await dl.arrayBuffer());
+          if (got.length < 1024 || got[0] !== 0x50 || got[1] !== 0x4b) throw new Error('文件不是完整 ZIP（' + got.length + ' 字节）');
+          if (asset.size && got.length !== asset.size) throw new Error('下载长度不符：' + got.length + '/' + asset.size);
+          buffer = got;
+          break;
+        } catch (error) {
+          this.log('warn', 'NapCat 安装包第 ' + attempt + ' 次下载失败：' + (error as Error).message);
+          if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, 1200 * attempt));
+        }
+      }
+      if (!buffer) throw new Error('NapCat 安装包连续 3 次下载不完整，请检查网络后重试，或手动下载 NapCat.Shell.Windows.OneKey.zip 解压到数据目录。');
       await fs.writeFile(zipPath, buffer);
-      this.log('info', '下载完成，解压安装器…');
+      this.log('info', '下载完成（已校验 ZIP，' + buffer.length + ' 字节），解压安装器…');
       const extractDir = path.join(tempRoot, 'onekey');
       await fs.mkdir(extractDir, { recursive: true });
-      await this.run('tar.exe', ['-xf', zipPath, '-C', extractDir], tempRoot, 120000);
+      try { await this.run('tar.exe', ['-xf', zipPath, '-C', extractDir], tempRoot, 120000); }
+      catch { throw new Error('NapCat 安装包解压失败（ZIP 可能损坏）。已尝试重新下载，请检查网络或手动安装。'); }
       const installer = path.join(extractDir, 'NapCatInstaller.exe');
-      if (!fsSync.existsSync(installer)) throw new Error('安装器中缺少 NapCatInstaller.exe');
+      if (!fsSync.existsSync(installer)) throw new Error('安装器中缺少 NapCatInstaller.exe，可能下载到了错误资产');
       this.log('info', '启动 NapCat 官方安装器（窗口已隐藏），完成后自动检测安装目录…');
       let exitCode = 0;
       try { exitCode = await this.run(installer, [], extractDir, 10 * 60_000); } catch (error) { this.log('warn', '安装器退出异常：' + (error as Error).message); }
