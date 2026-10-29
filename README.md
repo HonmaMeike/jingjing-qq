@@ -1,6 +1,7 @@
 # 鲸鲸 · QQ 智能伙伴
 
 > GitHub: https://github.com/HonmaMeike/jingjing-qq
+> 下载：https://github.com/HonmaMeike/jingjing-qq/releases/tag/v1.0.0
 
 > 一只从 DeepSeek 蓝海游来的鲸鱼娘，住进你的 Windows 桌面。
 > 她有长期记忆、自己的情绪与日记，会主动找你说话，也会在 QQ 群里交朋友。
