@@ -1,0 +1,29 @@
+name: Bug report
+about: 报告一个可复现的问题
+title: "[Bug] "
+labels: bug
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: 问题描述
+      description: 发生了什么？期望是什么？
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      placeholder: "1. ...\n2. ..."
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: 版本 / 系统
+      placeholder: "1.0.0 / Windows 11 24H2"
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志/截图
+      description: 请先移除 API Key、QQ 号等敏感信息。

@@ -16,4 +16,4 @@ msi-icon*.log
 *.tmp
 .env
 .env.*
-dsh-pet-assets/
+
