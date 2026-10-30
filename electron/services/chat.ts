@@ -18,7 +18,8 @@ import type { ObservabilityService } from './observability';
 import type { ConsciousnessService } from './consciousness';
 import type { StickerService } from './stickers';
 import type { ChatToolLimiter } from './chat-tools';
-import { parseChatCommand, type ChatCommand } from './chat-commands';
+import { type ChatCommand } from './chat-commands';
+import { routeIntent } from './intent-router';
 import { renderAffectionCard } from './affection-card';
 import { localSing } from './local-sing';
 import type { EventBus } from '../core/event-bus';
@@ -434,7 +435,8 @@ export class ChatService {
 
   private async generateReply(opts: { conversation: Conversation; persona: Persona; userMessage: ChatMessage; role: PermissionRole; incoming: boolean }): Promise<ChatSendResult> {
     const { conversation, persona, userMessage, role } = opts;
-    const command = parseChatCommand(userMessage.text);
+    const routed = routeIntent(userMessage.text);
+    const command = routed.kind === 'command' ? routed.command : null;
     if (command) {
       const commandResult = await this.runChatCommand(command, conversation, persona, userMessage, role);
       if (commandResult) return commandResult;
