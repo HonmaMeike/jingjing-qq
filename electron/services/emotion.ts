@@ -21,7 +21,8 @@ export class EmotionService {
 
   get(personaId: string): EmotionState {
     const data = this.store.get();
-    return data.byPersona[personaId] ?? this.fresh();
+    const state = data.byPersona[personaId] ?? this.fresh();
+    return { ...state, dailyEvent: state.dailyEvent || this.dailyEvent(personaId) };
   }
 
   private fresh(): EmotionState {
@@ -36,6 +37,25 @@ export class EmotionService {
     if (valence < -0.4) return { mood: '难过', emoji: '🌧️' };
     if (valence < -0.15) return { mood: '有点委屈', emoji: '🥹' };
     return { mood: '平静', emoji: '🌊' };
+  }
+
+
+  /** 每天固定生成一件小事；同一天、同一人设结果稳定。 */
+  dailyEvent(personaId: string): string {
+    const date = new Date().toISOString().slice(0, 10);
+    const events = [
+      '今天窗外的云压得很低，像要下雨，空气里有潮湿的咸味。',
+      '今天整理旧物时翻到一张很久以前的便签，愣了一会儿。',
+      '今天泡的茶有点苦，喝到一半才想起来忘了放糖。',
+      '今天楼下有一只猫蹲在台阶上，看了我很久。',
+      '今天路过一家小店，闻到刚出炉的面包味，站了一会儿。',
+      '今天把桌面收拾干净了，心情莫名轻了一点。',
+      '今天听到一首旧歌，想起一个很久没联系的人。',
+      '今天有点困，趴在窗边看光一点点挪过去。',
+    ];
+    let hash = 0;
+    for (const ch of personaId + '|' + date) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
+    return events[hash % events.length];
   }
 
   async apply(personaId: string, delta: Partial<EmotionState> & { mood?: string; reason?: string }, source = 'chat'): Promise<EmotionState> {
@@ -55,6 +75,7 @@ export class EmotionService {
       valence, arousal, energy, affection, patience, jealousy, pride,
       updatedAt: nowIso(), reason: delta.reason || current.reason,
     };
+    next.dailyEvent = this.dailyEvent(personaId);
     data.byPersona[personaId] = next;
     data.log = [...data.log.slice(-300), { at: next.updatedAt, mood, reason: `${source}: ${next.reason}` }];
     await this.store.set(data);

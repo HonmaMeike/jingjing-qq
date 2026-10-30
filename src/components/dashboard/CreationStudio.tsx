@@ -204,6 +204,21 @@ export default function CreationStudio({ open, onClose, persona, settings, onOpe
               </div>
             )}
 
+            {(tab === 'image' || tab === 'video') && (
+              <div className="dash-studio__options">
+                <Field label="画风约束" hint="会拼进所有画面提示词，锁定角色与画风">
+                  <Input
+                    value={tab === 'image' ? settings.media.imageStyle : settings.media.videoStyle}
+                    onChange={(event) => void saveSettings({ media: { ...settings.media, [tab === 'image' ? 'imageStyle' : 'videoStyle']: event.target.value } })}
+                    placeholder="深海蓝调电影感，柔和体积光，统一角色外观"
+                  />
+                </Field>
+                <Field label="锁定画风">
+                  <Toggle checked={settings.media.styleLock} onChange={(value) => void saveSettings({ media: { ...settings.media, styleLock: value } })} label="锁定角色与画风" />
+                </Field>
+              </div>
+            )}
+
             {tab === 'video' && (
               <div className="dash-studio__options dash-studio__options--3">
                 <Field label="模型">

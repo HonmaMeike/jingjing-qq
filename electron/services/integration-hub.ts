@@ -12,7 +12,7 @@ import type { EventBus } from '../core/event-bus';
 import type { Logger } from '../core/logger';
 import type { ObservabilityService } from './observability';
 
-interface VoiceCache { voices: VoiceInfo[]; total: number; syncedAt: string; latestVoiceId?: string }
+interface VoiceCache { voices: VoiceInfo[]; total: number; syncedAt: string; latestVoiceId?: string; scope?: string }
 
 export function mediaUrl(absPath: string, mediaRoot: string): string {
   const rel = path.relative(mediaRoot, absPath).split(path.sep).join('/');
@@ -190,7 +190,7 @@ export class IntegrationHub {
     if (!this.services.has('breezeblue')) return { voices: cached.voices, total: cached.voices.length, latestVoiceId: cached.latestVoiceId, syncedAt: cached.syncedAt || nowIso() };
     try {
       const result = await this.services.breezeblue.syncVoices();
-      const data: VoiceCache = { voices: result.voices, total: result.total, latestVoiceId: result.latestVoiceId, syncedAt: result.syncedAt };
+      const data: VoiceCache = { voices: result.voices, total: result.total, latestVoiceId: result.latestVoiceId, syncedAt: result.syncedAt, scope: 'personal' };
       await this.voices.set(data);
       const settings = this.getSettings();
       if (settings.tts.preferLatestVoice && result.latestVoiceId && !settings.models.breezeVoiceId) {
@@ -206,8 +206,13 @@ export class IntegrationHub {
   async synthesize(text: string, persona: Persona, voiceIdOverride?: string): Promise<{ ok: boolean; url?: string; filePath?: string; error?: string }> {
     if (!this.services.has('breezeblue')) return { ok: false, error: '尚未配置 BreezeBlue API Key' };
     const settings = this.getSettings();
-    let voiceId = voiceIdOverride || settings.models.breezeVoiceId;
+    let voiceId = voiceIdOverride || persona.voiceId || settings.models.breezeVoiceId;
     let voices = this.voices.get().voices;
+    if (voices.length && voiceId && !voices.some((v) => v.voiceId === voiceId)) {
+      // 人设绑定到了已删除/不属于当前账号的音色时，回退全局音色，避免 Breeze 500。
+      this.logger.warn('tts', '人设音色不可用，回退全局音色：' + voiceId);
+      voiceId = settings.models.breezeVoiceId || voiceId;
+    }
     if (!voiceId) {
       if (!voices.length) {
         try { const sync = await this.listVoices(true); voices = sync.voices; } catch { /* ignore */ }
@@ -256,7 +261,7 @@ export class IntegrationHub {
       const outDir = path.join(this.paths.mediaDir, 'images');
       await fs.mkdir(outDir, { recursive: true });
       const result = await this.services.minimax.generateImage({
-        prompt: [persona ? `角色气质：${persona.name}，${persona.tagline}` : '', prompt].filter(Boolean).join('\n'),
+        prompt: [settings.media.styleLock ? `【画风锁定】${settings.media.imageStyle}；保持角色发色、服装、体型与世界观一致，不要切换成其他画风。` : '', persona ? `角色气质：${persona.name}，${persona.tagline}` : '', prompt].filter(Boolean).join('\n'),
         aspectRatio: aspectRatio || settings.media.imageAspectRatio,
         n: settings.media.imageCount,
         promptOptimizer: settings.media.promptOptimizer,
@@ -279,7 +284,7 @@ export class IntegrationHub {
       const outDir = path.join(this.paths.mediaDir, 'videos');
       await fs.mkdir(outDir, { recursive: true });
       const result = await this.services.minimax.generateVideo({
-        prompt: [persona ? `角色气质：${persona.name}，${persona.tagline}` : '', prompt].filter(Boolean).join('\n'),
+        prompt: [settings.media.styleLock ? `【画风与角色锁定】${settings.media.videoStyle}；保持角色发色、服装、体型一致，不要切换画风。` : '', persona ? `角色气质：${persona.name}，${persona.tagline}` : '', prompt].filter(Boolean).join('\n'),
         duration: duration || settings.models.minimaxVideoDuration,
         resolution: resolution || settings.models.minimaxVideoResolution,
         model: settings.models.minimaxVideo,

@@ -84,6 +84,11 @@ export interface MediaSettings {
   /** 视频画幅比例（H3 T2V 必填，默认 16:9）。 */
   videoAspectRatio: string;
   imageCount: number;
+  /** 统一画风；所有文生图/文生视频都会附带，避免风格漂移。 */
+  imageStyle: string;
+  videoStyle: string;
+  /** 锁定角色外观与画风，不允许模型自由换风格。 */
+  styleLock: boolean;
   promptOptimizer: boolean;
   autoIllustrateQzone: boolean;
 }
@@ -317,6 +322,8 @@ export interface GrowthStage {
   color: string;
 }
 export interface EmotionState {
+  /** 今天发生的一件小事，用于注入日常连续感。 */
+  dailyEvent?: string;
   mood: string;
   moodEmoji: string;
   valence: number;

@@ -3,7 +3,7 @@ import type { AppSettings, GrowthStage } from '../../shared/types';
 const now = new Date().toISOString();
 
 export const DEFAULT_SETTINGS: AppSettings = {
-  version: 3,
+  version: 4,
   onboardingDone: false,
   firstRunAt: now,
   general: {
@@ -72,6 +72,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
     imageAspectRatio: '4:3',
     videoAspectRatio: '16:9',
     imageCount: 1,
+    imageStyle: 'DeepSeek 鲸鱼娘官方形象：蓝发蓝瞳、鲸鱼尾鳍、深海蓝调、柔和体积光、细腻二次元动画电影感、角色外观严格统一',
+    videoStyle: 'DeepSeek 鲸鱼娘官方形象：蓝发蓝瞳、鲸鱼尾鳍、深海蓝调、稳定镜头、柔和体积光、细腻二次元动画电影感、角色外观严格统一',
+    styleLock: true,
     promptOptimizer: true,
     autoIllustrateQzone: true,
   },

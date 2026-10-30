@@ -9,7 +9,7 @@ export interface ReplyMeta {
   voice?: boolean;
   sticker?: string;
   imagePrompt?: string;
-  actions?: { type: 'search' | 'image' | 'voice' | 'sticker'; query?: string; prompt?: string; name?: string }[];
+  actions?: { type: 'search' | 'image' | 'video' | 'music' | 'voice' | 'sticker'; query?: string; prompt?: string; name?: string }[];
   memory?: string[];
   raw?: unknown;
 }
@@ -21,7 +21,7 @@ export function metaInstruction(): string {
     '以下为系统级输出协议，优先于人设中的“不要输出 JSON”等格式约定：',
     '在正文结束后另起一行，输出 ' + META_MARKER + ' 和一个单行合法 JSON（不要代码块）。',
     'JSON 字段（都可省略）：{"mood":"此刻心情词","valenceDelta":-0.3到0.3,"energyDelta":-0.2到0.2,"affectionDelta":0到0.05,"voice":false,"sticker":"梗图名","actions":[{"type":"search","query":"..."}]}',
-    '只有用户明确要查最新信息/新闻时才用 search；只有明确要画画时才用 image；平时 actions 留空。',
+    '只有用户明确要查最新信息/新闻时才用 search；只有明确要画画/视频/唱歌时才用 image/video/music；平时 actions 留空。video 用 prompt，music 用 query（歌名或主题）。',
     'sticker 只能从提供的梗图名称中选择，不确定就省略。不要为了输出 JSON 而改变正文。',
   ].join('\n');
 }

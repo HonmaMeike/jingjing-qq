@@ -593,7 +593,7 @@ export class NapCatService {
         } else if (url.startsWith('http')) {
           segments.push({ type: 'image', data: { file: url } });
         }
-      } else if (attachment.kind === 'voice') {
+      } else if (attachment.kind === 'voice' || attachment.kind === 'music') {
         const file = attachment.localPath ?? this.resolveAsset(attachment.url);
         if (file) {
           try {
@@ -602,6 +602,12 @@ export class NapCatService {
           } catch { /* ignore */ }
         } else if (attachment.url?.startsWith('http')) {
           segments.push({ type: 'record', data: { file: attachment.url } });
+        }
+      } else if (attachment.kind === 'video') {
+        if (attachment.localPath) {
+          segments.push({ type: 'video', data: { file: 'file:///' + attachment.localPath.replace(/\\/g, '/') } });
+        } else if (attachment.url?.startsWith('http')) {
+          segments.push({ type: 'video', data: { file: attachment.url } });
         }
       }
     }
@@ -620,7 +626,12 @@ export class NapCatService {
           const res = await this.sendAction(action, { ...this.target(conversation), message: segments });
           this.deps.observability?.recordNeural({ type: 'reply', node: 'core', target: conversation.scene === 'group' ? 'qq' : 'qq', label: '回复已发送到 QQ', detail: part.text.slice(0, 120) });
           if (res.retcode && res.retcode !== 0) this.log('warn', '发送失败：' + (res.message || res.wording || res.retcode));
-          if (i < parts.length - 1) await sleep(700 + Math.random() * 900);
+          if (i < parts.length - 1) {
+            const delayCfg = this.deps.settings.get().napcat;
+            const min = Math.max(200, Number(delayCfg.replyDelayMinMs) || 700);
+            const max = Math.max(min + 100, Number(delayCfg.replyDelayMaxMs) || 1600);
+            await sleep(min + Math.random() * (max - min));
+          }
         } catch (error) { this.log('warn', '发送 QQ 消息失败：' + (error as Error).message); }
       }
     },
@@ -743,6 +754,46 @@ export class NapCatService {
   }
 
   // ---------------- install ----------------
+
+  /** OneKey 安装器内部下载 Shell 失败时，直接下载官方 Shell 并解压。 */
+  private async installShellFallback(tempRoot: string): Promise<string | null> {
+    try {
+      this.log('warn', '官方安装器没有完成安装，尝试直接下载 NapCat Shell…');
+      const rel = await fetch('https://api.github.com/repos/NapNeko/NapCatQQ/releases/latest', { headers: { 'User-Agent': 'JingJing-App' } });
+      if (!rel.ok) throw new Error('HTTP ' + rel.status);
+      const release = await rel.json() as { assets?: { name: string; browser_download_url: string; size: number }[] };
+      const asset = release.assets?.find((a) => a.name === 'NapCat.Shell.zip') ?? release.assets?.find((a) => a.name === 'NapCat.Shell.Windows.Node.zip');
+      if (!asset) throw new Error('没有找到 NapCat.Shell.zip');
+      const zipPath = path.join(tempRoot, asset.name);
+      let buffer: Buffer | null = null;
+      for (let attempt = 1; attempt <= 3; attempt += 1) {
+        try {
+          await fs.rm(zipPath, { force: true });
+          const response = await fetch(asset.browser_download_url + (attempt > 1 ? '?retry=' + attempt : ''), { headers: { 'User-Agent': 'JingJing-App' }, signal: AbortSignal.timeout(240_000) });
+          if (!response.ok) throw new Error('HTTP ' + response.status);
+          const got = Buffer.from(await response.arrayBuffer());
+          if (got.length < 1024 || got[0] !== 0x50 || got[1] !== 0x4b) throw new Error('不是完整 ZIP');
+          if (asset.size && got.length !== asset.size) throw new Error('长度不符 ' + got.length + '/' + asset.size);
+          buffer = got;
+          break;
+        } catch (error) { this.log('warn', 'NapCat Shell 第 ' + attempt + ' 次下载失败：' + (error as Error).message); if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, 1500 * attempt)); }
+      }
+      if (!buffer) return null;
+      await fs.writeFile(zipPath, buffer);
+      const dir = path.join(tempRoot, 'shell');
+      await fs.rm(dir, { recursive: true, force: true });
+      await fs.mkdir(dir, { recursive: true });
+      await this.run('tar.exe', ['-xf', zipPath, '-C', dir], tempRoot, 120_000);
+      const launcher = await this.findLauncher(dir);
+      if (!launcher) return null;
+      this.log('info', 'NapCat Shell 已解压：' + dir);
+      return dir;
+    } catch (error) {
+      this.log('warn', 'NapCat Shell 备用安装失败：' + (error as Error).message);
+      return null;
+    }
+  }
+
   async installOneKey(): Promise<NapCatInstallResult> {
     const tempRoot = path.join(this.deps.paths.napcatDir, 'installer');
     await fs.mkdir(tempRoot, { recursive: true });
@@ -784,11 +835,14 @@ export class NapCatService {
       this.log('info', '启动 NapCat 官方安装器（窗口已隐藏），完成后自动检测安装目录…');
       let exitCode = 0;
       try { exitCode = await this.run(installer, [], extractDir, 10 * 60_000); } catch (error) { this.log('warn', '安装器退出异常：' + (error as Error).message); }
-      const installDir = await this.findInstalledDir([extractDir, path.join(tempRoot, 'onekey'), this.deps.paths.napcatDir]);
-      if (!installDir) {
+      let installDir = await this.findInstalledDir([extractDir, path.join(tempRoot, 'onekey'), this.deps.paths.napcatDir]);
+      let finalInstallDir = installDir;
+      if (!finalInstallDir) finalInstallDir = await this.installShellFallback(tempRoot);
+      if (!finalInstallDir) {
         this.setStatus({ kind: 'stopped' });
-        return { ok: false, message: `安装器已退出（码 ${exitCode}），但没有找到 NapCat.Shell 目录。请尝试手动安装，或填写已有目录。`, log: this.getLogs(25).map((l) => l.text) };
+        return { ok: false, message: `安装器已退出（码 ${exitCode}），备用 Shell 也未安装成功。请检查网络后重试，或手动下载 NapCat.Shell.Windows.OneKey.zip 解压，并在设置里选择已有 NapCat 目录。`, log: this.getLogs(30).map((l) => l.text) };
       }
+      installDir = finalInstallDir;
       await this.deps.settings.save({ napcat: { ...this.deps.settings.get().napcat, installDir } });
       this.setStatus({ kind: 'stopped', installed: true, installDir });
       this.log('info', 'NapCat 安装完成：' + installDir);

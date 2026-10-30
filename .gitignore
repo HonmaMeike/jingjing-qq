@@ -16,3 +16,5 @@ msi-icon*.log
 .env
 .env.*
 
+
+resources/ffmpeg.exe

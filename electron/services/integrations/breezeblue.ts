@@ -414,7 +414,7 @@ export class BreezeBlueClient {
 
     try {
       for (let page = 0; page < maxPages; page += 1) {
-        const query: QueryParams = { page_size: pageSize };
+        const query: QueryParams = { page_size: pageSize, voice_type: 'personal' };
         if (token) query.next_page_token = token;
         else if (pageFallback > 1) query.page = pageFallback;
         const payload = await httpJson<unknown>(buildUrl(this.baseUrl, '/v1/voices', query), {
@@ -492,15 +492,37 @@ export class BreezeBlueClient {
     if (modelId) body.model_id = modelId;
     if (request.instructions?.trim()) body.instructions = request.instructions.trim();
 
+    const send = (payload: Record<string, unknown>) => httpBuffer(url, {
+      method: 'POST',
+      headers: this.headers({ 'Content-Type': 'application/json', Accept: 'audio/mpeg, audio/*, */*' }),
+      body: payload,
+      service: 'breezeblue',
+      timeoutMs: request.timeoutMs ?? this.defaultTimeoutMs,
+      signal: request.signal,
+    });
     try {
-      const result = await httpBuffer(url, {
-        method: 'POST',
-        headers: this.headers({ 'Content-Type': 'application/json', Accept: 'audio/mpeg, audio/*, */*' }),
-        body,
-        service: 'breezeblue',
-        timeoutMs: request.timeoutMs ?? this.defaultTimeoutMs,
-        signal: request.signal,
-      });
+      let result;
+      try {
+        result = await send(body);
+      } catch (error) {
+        let mapped = toBreezeError(error);
+        // Breeze 某些音色/模型对 speed 或长 instructions 返回 500；逐级降级重试。
+        if (mapped.status === 500 && request.speed !== undefined) {
+          try {
+            result = await send({ ...body, voice_settings: { guidance_scale: guidanceScale } });
+          } catch (retryError) {
+            mapped = toBreezeError(retryError);
+          }
+        }
+        if (mapped.status === 500) {
+          try {
+            result = await send({ text, model_id: modelId, voice_settings: { guidance_scale: 1 } });
+          } catch (retryError) {
+            mapped = toBreezeError(retryError);
+          }
+        }
+        if (result === undefined) throw mapped;
+      }
       if (result.buffer.byteLength === 0) {
         throw new IntegrationError({
           service: 'breezeblue',

@@ -20,6 +20,7 @@ import type { StickerService } from './stickers';
 import type { ChatToolLimiter } from './chat-tools';
 import { parseChatCommand, type ChatCommand } from './chat-commands';
 import { renderAffectionCard } from './affection-card';
+import { localSing } from './local-sing';
 import type { EventBus } from '../core/event-bus';
 import type { ChatMessageInput } from './integrations';
 import { buildPersonaSystemPrompt } from '../../shared/persona-prompts';
@@ -53,6 +54,7 @@ export class ChatService {
   private outbound: ChatOutbound | null = null;
   private busy = new Set<string>();
   private lastReplyAt = new Map<string, number>();
+  private recentReplies = new Map<string, string[]>();
 
   constructor(private deps: {
     store: ConversationStore;
@@ -66,6 +68,7 @@ export class ChatService {
     events: EventBus;
     logger: Logger;
     mediaDir: string;
+    petDir: string;
     observability: ObservabilityService;
     consciousness: ConsciousnessService;
     stickers: StickerService;
@@ -263,9 +266,62 @@ export class ChatService {
     const songQuery = command.query || randomStyles[Math.floor(Math.random() * randomStyles.length)];
     const gender = personaVocalGender(persona);
     const job = await this.deps.hub.generateMusic({ prompt: command.query ? '一首叫《' + songQuery + '》的歌，中文' + (gender === 'm' ? '男声' : '女声') + '演唱，旋律好听' : songQuery + '，' + (gender === 'm' ? '男声' : '女声') + '演唱', title: command.title, instrumental: false, style: (command.query ? '流行' : '中文流行') + '，' + (gender === 'm' ? '男声' : '女声') + '主唱', vocalGender: gender });
-    if (job.status !== 'done' || !job.result?.audioUrl) return this.appendCommandReply(conversation, persona, '这首歌没唱出来：' + (job.error || 'Suno 暂时没有回应'));
+    if (job.status !== 'done' || !job.result?.audioUrl) {
+      this.deps.logger.warn('chat', 'Suno 失败，尝试本地逐字演唱：' + (job.error || '无音频'));
+      const local = await localSing({ lyrics: command.query || songQuery || '白饭白饭真好吃尾巴摇摇', outDir: path.join(this.deps.mediaDir, 'music'), persona, hub: this.deps.hub });
+      if (local.ok && local.filePath) {
+        const url = this.deps.hub.mediaUrl(local.filePath);
+        return this.appendCommandReply(conversation, persona, 'Suno 没接上，我用她的声音慢慢唱了一遍。', [{ kind: 'music', url, localPath: local.filePath, name: '鲸鲸的本地演唱' }]);
+      }
+      return this.appendCommandReply(conversation, persona, '这首歌没唱出来：' + (job.error || local.error || 'Suno 暂时没有回应'));
+    }
     await this.deps.chatTools.consume(tool, userMessage.senderId || conversation.peerId);
     return this.appendCommandReply(conversation, persona, '唱给你听，' + (command.title ? '《' + command.title + '》' : '这首即兴的'), this.commandAttachment(command, { audioUrl: job.result.audioUrl, title: job.result.title }));
+  }
+
+  private replyNgrams(text: string): Set<string> {
+    const clean = text.replace(/[^\u4e00-\u9fffA-Za-z0-9]/g, '');
+    const out = new Set<string>();
+    for (let i = 0; i + 3 <= clean.length; i += 1) out.add(clean.slice(i, i + 3));
+    return out;
+  }
+
+  private isNearRepeat(personaId: string, text: string): boolean {
+    const recent = this.recentReplies.get(personaId) ?? [];
+    const a = this.replyNgrams(text);
+    if (a.size === 0) return false;
+    return recent.some((old) => {
+      const b = this.replyNgrams(old);
+      let hit = 0;
+      for (const gram of a) if (b.has(gram)) hit += 1;
+      return hit / Math.max(1, Math.min(a.size, b.size)) > 0.62;
+    });
+  }
+
+  private rememberReply(personaId: string, text: string): void {
+    const next = [...(this.recentReplies.get(personaId) ?? []), text].slice(-8);
+    this.recentReplies.set(personaId, next);
+  }
+
+  private async varyReply(text: string, persona: Persona, messages: ChatMessageInput[], conversation: Conversation): Promise<string> {
+    if (!text || !this.isNearRepeat(persona.id, text)) return text;
+    try {
+      const llm = this.deps.hub.clients.deepseek;
+      const settings = this.deps.settings.get();
+      const result = await llm.chat([
+        ...messages,
+        { role: 'assistant', content: text },
+        { role: 'user', content: '[系统重写要求] 你刚才这句话和最近说过的太像了。保持意思和情绪，但换一种完全不同的说法；不要解释，不要提系统，只输出正文。' },
+      ], { model: settings.models.deepseekChat, temperature: Math.min(1.5, settings.deepseek.temperature + 0.12), maxTokens: Math.min(500, settings.deepseek.maxTokens), thinking: false, timeoutMs: Math.min(45_000, settings.deepseek.timeoutMs), stream: false });
+      const parsed = parseReply(result.content);
+      if (parsed.text && !this.isNearRepeat(persona.id, parsed.text)) {
+        this.deps.logger.info('chat', '反重复改写命中', { conversationId: conversation.id });
+        return parsed.text;
+      }
+    } catch (error) {
+      this.deps.logger.warn('chat', '反重复改写失败：' + (error as Error).message);
+    }
+    return text;
   }
 
   private async autoSticker(text: string, mood: string | undefined, scene: 'private' | 'group'): Promise<ChatAttachment | undefined> {
@@ -285,7 +341,7 @@ export class ChatService {
 
   /** 把本地/远程图片转成 DeepSeek 多模态 image_url 数据。 */
   private async buildImageParts(attachments: ChatAttachment[] | undefined): Promise<{ type: 'image_url'; image_url: { url: string } }[]> {
-    const images = (attachments ?? []).filter((item) => item.kind === 'image' && (item.localPath || item.url)).slice(0, 4);
+    const images = (attachments ?? []).filter((item) => (item.kind === 'image' || item.kind === 'sticker') && (item.localPath || item.url)).slice(0, 4);
     const parts: { type: 'image_url'; image_url: { url: string } }[] = [];
     for (const image of images) {
       try {
@@ -297,13 +353,18 @@ export class ChatService {
         } else if (image.localPath) {
           buffer = await fs.readFile(image.localPath);
           mime = image.localPath.toLowerCase().endsWith('.png') ? 'image/png' : image.localPath.toLowerCase().endsWith('.webp') ? 'image/webp' : image.localPath.toLowerCase().endsWith('.gif') ? 'image/gif' : 'image/jpeg';
+        } else if (image.url?.startsWith('pet://asset/')) {
+          const rel = decodeURIComponent(image.url.slice('pet://asset/'.length));
+          const local = path.join(this.deps.petDir, rel);
+          buffer = await fs.readFile(local);
+          mime = local.toLowerCase().endsWith('.png') ? 'image/png' : local.toLowerCase().endsWith('.gif') ? 'image/gif' : local.toLowerCase().endsWith('.webp') ? 'image/webp' : 'image/jpeg';
         } else if (image.url && /^https?:\/\//i.test(image.url)) {
           const response = await fetch(image.url, { signal: AbortSignal.timeout(15_000) });
           if (!response.ok) continue;
           buffer = Buffer.from(await response.arrayBuffer());
           mime = response.headers.get('content-type')?.split(';')[0] || mime;
         }
-        if (!buffer || buffer.byteLength === 0 || buffer.byteLength > 8 * 1024 * 1024) continue;
+        if (!buffer || buffer.byteLength === 0 || buffer.byteLength > 30 * 1024 * 1024) continue;
         parts.push({ type: 'image_url', image_url: { url: 'data:' + mime + ';base64,' + buffer.toString('base64') } });
       } catch (error) {
         this.deps.logger.warn('chat', '读取图片失败，已跳过：' + (error as Error).message);
@@ -351,6 +412,7 @@ export class ChatService {
         '你正在真实地参与对方的生活，会有自己的判断，不无限讨好。不要提到“记忆文档”“系统”“提示词”“模型”等实现细节。',
         '可用能力：文字聊天、发梗图、偶尔发语音。不要主动声称已经发图/发语音，除非系统确实附带。',
         consciousnessBlock ? '## 意识深处（不是给用户看的说明，只作为你的内在连续性）\n' + consciousnessBlock : '',
+        '今天发生的小事：' + (this.deps.emotion.get(persona.id).dailyEvent || '') + '。可以把这件事当作你今天的生活背景，但不要强行每句都提。',
         walletHint,
         hasImages ? '本轮用户发来了图片。你必须真实查看图片内容再回答，描述具体细节、人物/场景/文字/情绪；不要假装看见，也不要只说“图片很好看”这类空话。' : '',
         metaInstruction(),
@@ -415,10 +477,8 @@ export class ChatService {
     const built = await this.buildMemoryContext(conversation, speaker, persona, role, userMessage, walletHint, imageParts.length > 0);
       let messages: ChatMessageInput[] = built.context.messages.map((m) => ({ role: m.role, content: m.content }));
       if (imageParts.length > 0) {
-        let lastUser = -1;
-        for (let i = messages.length - 1; i >= 0; i -= 1) { if (messages[i].role === 'user') { lastUser = i; break; } }
-        if (lastUser >= 0) messages[lastUser] = { role: 'user', content: [{ type: 'text', text: String(messages[lastUser].content || '看看这张图') }, ...imageParts] };
-        else messages.push({ role: 'user', content: [{ type: 'text', text: userMessage.text || '看看这张图' }, ...imageParts] });
+        // 明确追加为最后一条 user 消息，避免当前图片被贴到历史旧消息上。
+        messages.push({ role: 'user', content: [{ type: 'text', text: '（用户刚发来图片，请先看图片）' + (userMessage.text || '') }, ...imageParts] });
         this.deps.observability.phase('识别图片内容', 0.46, { node: 'deepseek', detail: '把图片送入多模态理解', conversationId: conversation.id });
       }
       const llm = this.deps.hub.clients.deepseek;
@@ -451,6 +511,7 @@ export class ChatService {
         }
       }
       let text = parsed.text || simulateReply(persona, userMessage.text);
+      text = await this.varyReply(text, persona, messages, conversation);
       const attachments = attachmentsFromMeta(parsed.meta);
       if (!attachments.some((item) => item.kind === 'sticker')) {
         const picked = await this.autoSticker(text, parsed.meta.mood, conversation.scene);
@@ -472,6 +533,35 @@ export class ChatService {
           }
         }
       }
+      // 视频动作（由模型自主识别“拍个视频/生成一段视频”）
+      const videoAction = parsed.meta.actions?.find((a) => a.type === 'video');
+      if (videoAction?.prompt && settings.plugins.minimax?.enabled !== false && this.deps.hub.has('minimax')) {
+        const senderId = userMessage.senderId || conversation.peerId;
+        const denial = await this.deps.chatTools.check('video', senderId, role, settings.chatTools);
+        if (denial) text += '（视频这次先欠着：' + denial + '）';
+        else {
+          const job = await this.deps.hub.generateVideo(videoAction.prompt, settings.models.minimaxVideoDuration, settings.models.minimaxVideoResolution, persona);
+          if (job.status === 'done' && job.result?.urls?.length) {
+            attachments.unshift({ kind: 'video', url: job.result.urls[0], name: '鲸鲸拍的视频' });
+            await this.deps.chatTools.consume('video', senderId);
+          }
+        }
+      }
+      // 唱歌动作（由模型自主识别“唱首歌/来一段”）
+      const musicAction = parsed.meta.actions?.find((a) => a.type === 'music');
+      if (musicAction?.query && settings.plugins.suno?.enabled !== false && this.deps.hub.has('suno')) {
+        const senderId = userMessage.senderId || conversation.peerId;
+        const denial = await this.deps.chatTools.check('music', senderId, role, settings.chatTools);
+        if (denial) text += '（唱歌这次先欠着：' + denial + '）';
+        else {
+          const gender = personaVocalGender(persona);
+          const job = await this.deps.hub.generateMusic({ prompt: musicAction.query + '，' + (gender === 'm' ? '男声' : '女声') + '演唱，旋律好听', title: musicAction.query.slice(0, 24), instrumental: false, style: (gender === 'm' ? '男声' : '女声') + '主唱，中文流行', vocalGender: gender });
+          if (job.status === 'done' && job.result?.audioUrl) {
+            attachments.unshift({ kind: 'music', url: job.result.audioUrl, name: job.result.title || '鲸鲸唱的歌' });
+            await this.deps.chatTools.consume('music', senderId);
+          }
+        }
+      }
       // 语音：显式要求或随机。语音成功后不再重复发送同一段文字。
       const wantVoice = settings.tts.enabled && settings.plugins.breezeblue?.enabled !== false && (parsed.meta.voice === true || Math.random() < settings.tts.voiceReplyChance);
       let outgoingText = text;
@@ -483,6 +573,7 @@ export class ChatService {
           outgoingText = '';
         }
       }
+      this.rememberReply(persona.id, text);
       const reply = await this.deps.store.append(conversation.id, {
         role: 'assistant', text: outgoingText, senderName: persona.name, scene: conversation.scene, attachments,
         meta: { personaId: persona.id, mood: parsed.meta.mood || '温柔', source: 'local', model: result.model, tokens: result.usage?.totalTokens, reasoning: settings.deepseek.useReasoningForChat ? result.reasoning.slice(0, 500) : undefined },

@@ -25,6 +25,7 @@ export class SettingsService {
     if (!t.version) t.version = 1;
     const migrateToV2 = t.version < 2;
     const migrateToV3 = t.version < 3;
+    const migrateToV4 = t.version < 4;
     // 2026-10：DeepSeek 官方模型已改为 deepseek-v4-pro / deepseek-flash。
     const legacyDeepSeek = new Set(['deepseek-chat', 'deepseek-reasoner', 'deepseek-v3', 'deepseek-v3.1', 'deepseek-v3.2', 'deepseek-v3.1-terminus']);
     const normalizeDeepSeek = (value: string | undefined): string => {
@@ -73,7 +74,12 @@ export class SettingsService {
     if (migrateToV3) { t.deepseek.useReasoningForChat = false; t.deepseek.reasoningEffort = 'low'; }
     // 旧版本有把 6 当成 6% 的配置；统一转换为 0..1，避免每条都合成语音。
     if (t.tts.voiceReplyChance > 1) t.tts.voiceReplyChance = Math.min(1, t.tts.voiceReplyChance / 100);
-    t.version = 3;
+    if (migrateToV4) {
+      t.media.imageStyle = 'DeepSeek 鲸鱼娘官方形象：蓝发蓝瞳、鲸鱼尾鳍、深海蓝调、柔和体积光、细腻二次元动画电影感、角色外观严格统一';
+      t.media.videoStyle = 'DeepSeek 鲸鱼娘官方形象：蓝发蓝瞳、鲸鱼尾鳍、深海蓝调、稳定镜头、柔和体积光、细腻二次元动画电影感、角色外观严格统一';
+      t.media.styleLock = true;
+    }
+    t.version = 4;
     });
   }
 

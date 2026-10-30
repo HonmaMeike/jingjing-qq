@@ -25,6 +25,7 @@ import { ObservabilityService } from './observability';
 import { createConsciousnessService, type ConsciousnessService } from './consciousness';
 import { StickerService } from './stickers';
 import { ChatToolLimiter } from './chat-tools';
+import { migrateStateFiles } from './state-migrations';
 
 export class AppServices {
   readonly events = new EventBus();
@@ -59,6 +60,7 @@ export class AppServices {
   async init(): Promise<void> {
     await this.vault.load();
     this.settings = await SettingsService.create({ file: this.paths.settingsFile, vault: this.vault, events: this.events, logger: this.logger });
+    await migrateStateFiles(this.paths.dataDir, { info: (msg) => this.logger.info('state-migrations', msg), warn: (msg) => this.logger.warn('state-migrations', msg) });
     this.observability = await ObservabilityService.create({ file: path.join(this.paths.dataDir, 'usage.json'), events: this.events, getSettings: () => this.settings.get() });
     this.mediaServer = await startMediaServer({ mediaDir: this.paths.mediaDir, petDir: this.paths.bundledPetDir, externalPetDir: this.paths.defaultExternalPetDir, preferredPort: 47821 });
     this.hub = await IntegrationHub.create({
@@ -138,7 +140,7 @@ export class AppServices {
     this.chat = new ChatService({
       store: this.conversations, settings: this.settings, personas: this.personas, memory: this.memory,
       emotion: this.emotion, growth: this.growth, content: this.content, hub: this.hub, events: this.events,
-      logger: this.logger, mediaDir: this.paths.mediaDir, observability: this.observability, consciousness: this.consciousness, stickers: this.stickers, chatTools: this.chatTools,
+      logger: this.logger, mediaDir: this.paths.mediaDir, petDir: this.paths.bundledPetDir, observability: this.observability, consciousness: this.consciousness, stickers: this.stickers, chatTools: this.chatTools,
     });
     this.napcat = new NapCatService({
       settings: this.settings, events: this.events, logger: this.logger,
